@@ -1,0 +1,36 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.10'
+          - os: ubuntu-latest
+            python: '3.14'
+          - os: windows-latest
+            python: '3.12'
+          - os: macos-latest
+            python: '3.12'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e . pytest ruff build
+      - run: ruff check .
+      - name: Install pinned backup engine
+        run: guestvault setup
+      - name: Real cross-platform backup and recovery smoke test
+        run: python -m pytest -q tests/test_smoke.py
+      - name: Linux recovery and safety integration tests
+        if: runner.os == 'Linux'
+        run: |
+          export GUESTVAULT_TEST_RESTIC="$HOME/.local/state/guestvault/bin/restic"
+          python -m pytest -q
+      - run: python -m build

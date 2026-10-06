@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guestvault"
+version = "0.1.0"
+description = "Encrypted periodic backups and recovery bundles from inside a VM"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "isiliconx"}]
+dependencies = []
+
+[project.scripts]
+guestvault = "guestvault.cli:main"
+
+[tool.setuptools.package-data]
+guestvault = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
