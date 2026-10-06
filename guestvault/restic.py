@@ -74,15 +74,19 @@ class Restic:
         if (
             arguments
             and arguments[0] == "init"
+            and password != ""
             and (len(password) < 12 or "\n" in password or "\r" in password)
         ):
             raise ValueError(
                 "New encrypted repositories and exports require a password of at least 12 characters without line breaks."
             )
-        env = {k: v for k, v in os.environ.items() if not k.startswith("RESTIC_")}
-        env["RESTIC_PASSWORD"] = password
+        env, flags = credentials(password)
+        source_flags = []
         if from_password is not None:
-            env["RESTIC_FROM_PASSWORD"] = from_password
+            if from_password == "":
+                source_flags.append("--from-insecure-no-password")
+            else:
+                env["RESTIC_FROM_PASSWORD"] = from_password
         command = [
             self.executable,
             "--repo",
@@ -90,7 +94,11 @@ class Restic:
             "--cache-dir",
             str(self.root / "cache"),
             "--json",
+            "--compression",
+            "auto",
+            *flags,
             *map(str, arguments),
+            *source_flags,
         ]
         process = subprocess.Popen(
             command,
@@ -131,3 +139,18 @@ class Restic:
     def snapshots(self, repository, password):
         events = self.run(repository, password, ["snapshots"])
         return next((e for e in events if isinstance(e, list)), [])
+
+
+def credentials(password):
+    """Empty passwords require explicit restic flags, never a password environment variable."""
+    if not isinstance(password, str):
+        raise ValueError("A password or an explicit empty password is required.")
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("RESTIC_") or k in {"RESTIC_REST_USERNAME", "RESTIC_REST_PASSWORD"}
+    }
+    if password == "":
+        return env, ["--insecure-no-password"]
+    env["RESTIC_PASSWORD"] = password
+    return env, []

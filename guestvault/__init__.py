@@ -1,3 +1,3 @@
 """GuestVault: backup software that runs inside the guest operating system."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

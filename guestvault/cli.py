@@ -25,7 +25,7 @@ def progress(event):
 
 
 def parser():
-    p = argparse.ArgumentParser(description="GuestVault: encrypted backups from inside your VM")
+    p = argparse.ArgumentParser(description="GuestVault: compressed backups from inside your VM")
     p.add_argument("--state", help="Private state directory (use the same one for all commands)")
     p.add_argument("--restic", help="Path to restic >=0.19.1")
     commands = p.add_subparsers(dest="command", required=True)
@@ -43,6 +43,11 @@ def parser():
     c.add_argument("--image-target", help="Windows system image staging drive, e.g. E:")
     c.add_argument("--schedule", action="store_true", help="Enable the persisted interval schedule")
     c.add_argument(
+        "--no-password",
+        action="store_true",
+        help="Create unprotected backups anyone with access can read",
+    )
+    c.add_argument(
         "--remember-password",
         action="store_true",
         help="Save password locally for unattended backups",
@@ -57,20 +62,28 @@ def parser():
     e.add_argument("--use-saved-password", action="store_true")
     v = commands.add_parser("verify")
     v.add_argument("bundle")
+    v.add_argument(
+        "--no-password", action="store_true", help="Verify an unprotected backup without prompting"
+    )
     r = commands.add_parser("restore")
     r.add_argument("bundle")
     r.add_argument("--target", required=True, help="Empty directory or empty offline root mount")
+    r.add_argument(
+        "--no-password", action="store_true", help="Import an unprotected backup without prompting"
+    )
     image = commands.add_parser(
         "backup-disk", help="Image an unmounted whole disk from Linux rescue media"
     )
     image.add_argument("--device", required=True)
     image.add_argument("--repository", required=True)
     image.add_argument("--bundle")
+    image.add_argument("--no-password", action="store_true")
     disk_restore = commands.add_parser(
         "restore-disk", help="Erase and restore an offline disk from an image bundle"
     )
     disk_restore.add_argument("bundle")
     disk_restore.add_argument("--device", required=True)
+    disk_restore.add_argument("--no-password", action="store_true")
     disk_restore.add_argument(
         "--erase-device", required=True, help="Repeat the target path to authorize erasing it"
     )
@@ -94,7 +107,9 @@ def main(argv=None):
         elif args.command == "doctor":
             result = doctor()
         elif args.command == "configure":
-            if args.schedule and not args.remember_password:
+            if args.no_password and args.remember_password:
+                raise ValueError("Use either --no-password or --remember-password.")
+            if args.schedule and not args.remember_password and not args.no_password:
                 raise ValueError("Scheduling requires --remember-password for unattended backups.")
             password = None
             if args.remember_password:
@@ -113,6 +128,7 @@ def main(argv=None):
                     args.exclude,
                     args.export_directory,
                     args.image_target,
+                    password_required=not args.no_password,
                 )
                 if password is not None:
                     store.save_password(password)
@@ -134,23 +150,34 @@ def main(argv=None):
         elif args.command == "install-service":
             from .service import install as service_install
 
-            result = {"installed": service_install(store)}
+            result = {"installed": service_install(store, args.restic)}
         else:
             engine = Engine(store, args.restic, progress)
-            if args.command == "snapshots":
-                result = engine.snapshots(getpass.getpass("Repository password: "))
-            elif args.command == "backup":
-                password = (
-                    None if args.use_saved_password else getpass.getpass("Repository password: ")
+
+            def repository_password():
+                if not engine.plan().get("password_required", True) or getattr(
+                    args, "use_saved_password", False
+                ):
+                    return None
+                return getpass.getpass("Repository password: ")
+
+            def backup_password():
+                return (
+                    ""
+                    if args.no_password
+                    else getpass.getpass("Backup password (Enter for no password): ")
                 )
+
+            if args.command == "snapshots":
+                result = engine.snapshots(repository_password())
+            elif args.command == "backup":
+                password = repository_password()
                 result = engine.backup(password, args.bundle)
             elif args.command == "export":
-                password = (
-                    None if args.use_saved_password else getpass.getpass("Repository password: ")
-                )
+                password = repository_password()
                 result = engine.export(args.snapshot, args.destination, password)
             elif args.command == "verify":
-                result = engine.verify_bundle(args.bundle, getpass.getpass("Backup password: "))
+                result = engine.verify_bundle(args.bundle, backup_password())
             elif args.command == "backup-disk":
                 from .disks import backup as disk_backup
 
@@ -158,7 +185,7 @@ def main(argv=None):
                     engine,
                     args.device,
                     args.repository,
-                    getpass.getpass("Repository password: "),
+                    "" if args.no_password else getpass.getpass("Repository password: "),
                     args.bundle,
                 )
             elif args.command == "restore-disk":
@@ -169,12 +196,10 @@ def main(argv=None):
                     args.bundle,
                     args.device,
                     args.erase_device,
-                    getpass.getpass("Backup password: "),
+                    backup_password(),
                 )
             else:
-                result = engine.restore(
-                    args.bundle, args.target, getpass.getpass("Backup password: ")
-                )
+                result = engine.restore(args.bundle, args.target, backup_password())
         print(json.dumps(result, indent=2))
         return 1 if isinstance(result, dict) and result.get("error") else 0
     except Exception as exc:

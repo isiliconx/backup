@@ -19,10 +19,18 @@ function modeChanged() {
   $("sources-field").classList.toggle("hidden", $("mode").value !== "folders");
   $("image-field").classList.toggle("hidden", $("mode").value !== "windows-image");
 }
+function protectionChanged() {
+  const protectedBackup = $("protected").checked;
+  $("protection-label").textContent = protectedBackup ? "Password protected" : "No password";
+  $("password-fields").classList.toggle("hidden", !protectedBackup);
+  $("remember").disabled = !protectedBackup;
+  if (!protectedBackup) $("remember").checked = false;
+  $("protection-note").textContent = protectedBackup ? "Protected backups need their password to restore." : "No password: anyone with your backup file can read its contents.";
+}
 function planData() {
   return {mode: $("mode").value, sources: lines($("sources").value), repository: $("repository").value,
     export_directory: $("exports").value || null, interval: Number($("hours").value), password: $("password").value,
-    excludes: lines($("excludes").value), remember: $("remember").checked, scheduled: $("scheduled").checked,
+    excludes: lines($("excludes").value), password_required: $("protected").checked, remember: $("remember").checked, scheduled: $("scheduled").checked,
     image_target: $("image-target").value || null};
 }
 async function action(callback) {
@@ -34,6 +42,7 @@ async function refresh() {
     state = await api("/api/status");
     $("os").textContent = `${state.doctor.os} · ${state.doctor.architecture}`;
     $("privilege").textContent = state.doctor.elevated ? "Administrator access" : "User access · folders only";
+    $("scheduler-status").textContent = state.scheduler_running ? "Background scheduler running" : "Scheduling runs while this interface is open";
     $("setup").classList.toggle("hidden", Boolean(state.restic));
     $("warnings").replaceChildren(...state.doctor.limitations.map(text => { const p=document.createElement("p"); p.textContent=text; return p; }));
     if (!initialized) {
@@ -46,7 +55,9 @@ async function refresh() {
       $("exports").value = p?.export_directory || "";
       $("excludes").value = p?.excludes.join("\n") || "";
       $("scheduled").checked = Boolean(p?.scheduled);
-      $("remember").checked = Boolean(p?.scheduled);
+      $("protected").checked = p ? p.password_required !== false : false;
+      $("remember").checked = Boolean(p?.scheduled && $("protected").checked);
+      protectionChanged();
       $("image-target").value = p?.image_target || "";
       modeChanged();
     }
@@ -59,7 +70,7 @@ async function refresh() {
     $("progress").classList.toggle("hidden", !running);
     $("job-title").textContent = running ? "Operation in progress…" : job.state === "done" ? "Operation completed." : job.state === "failed" ? "Operation failed." : "Ready when you are.";
     const p = job.progress;
-    $("job-message").textContent = job.error || p?.message || p?.error || (running ? "Reading and protecting your data. Large backups can take a while." : "Backups stay encrypted in your repository and portable files.");
+    $("job-message").textContent = job.error || p?.message || p?.error || (running ? "Reading and compressing your data. Large backups can take a while." : "Backups are compressed and verified. Password protection is optional.");
     $("progress-bar").style.width = `${Math.max(4, Math.min(100, 100 * (p?.percent_done || 0)))}%`;
     $("job-result").classList.toggle("hidden", !job.result);
     $("job-result").textContent = job.result ? JSON.stringify(job.result, null, 2) : "";
@@ -71,14 +82,15 @@ document.querySelectorAll(".nav").forEach(button => button.addEventListener("cli
   $("backup-tab").classList.toggle("hidden", button.dataset.tab !== "backup");
   $("restore-tab").classList.toggle("hidden", button.dataset.tab !== "restore");
   $("page-title").textContent = button.dataset.tab === "backup" ? "A way back to your VM." : "Bring your saved data back.";
-  $("page-subtitle").textContent = button.dataset.tab === "backup" ? "Save your files, apps’ data and system configuration in an encrypted backup." : "Verify and import an encrypted backup from any saved location.";
+  $("page-subtitle").textContent = button.dataset.tab === "backup" ? "Save your files, apps’ data and system configuration in a compressed backup." : "Verify and import a backup from any saved location.";
 }));
 $("mode").addEventListener("change", modeChanged);
-$("scheduled").addEventListener("change", () => { if($("scheduled").checked) $("remember").checked = true; });
+$("protected").addEventListener("change", protectionChanged);
+$("scheduled").addEventListener("change", () => { if($("scheduled").checked && $("protected").checked) $("remember").checked = true; });
 $("save").addEventListener("click", () => action(async () => { await api("/api/configure", planData()); notice("Backup plan saved."); }));
 $("backup").addEventListener("click", () => action(async () => {
   if (!state.plan) throw new Error("Save your backup plan first.");
-  const password = $("password").value;
+  const password = state.plan.password_required === false ? "" : $("password").value;
   await api("/api/backup", { password: password || null, saved: !password });
   $("password").value = "";
 }));

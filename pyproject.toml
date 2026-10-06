@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "guestvault"
-version = "0.1.0"
-description = "Encrypted periodic backups and recovery bundles from inside a VM"
+version = "0.2.0"
+description = "Compressed VM backups and recovery bundles with optional password protection"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

@@ -12,6 +12,7 @@ from pathlib import Path
 from . import bundle
 from .engine import local_repository
 from .platforms import elevated
+from .restic import credentials
 
 
 def offline_device(device):
@@ -110,14 +111,14 @@ def restore(engine, path, device, erase_device, password):
         if len(files) != 1 or files[0].get("size") != sizes[0]:
             raise ValueError("Image size does not match its encrypted metadata.")
         offline_device(device)  # Recheck after the potentially long integrity scan.
-        env = {k: v for k, v in os.environ.items() if not k.startswith("RESTIC_")}
-        env["RESTIC_PASSWORD"] = password
+        env, flags = credentials(password)
         command = [
             engine.restic.executable,
             "--repo",
             str(repository),
             "--cache-dir",
             str(engine.store.root / "cache"),
+            *flags,
             "dump",
             descriptor["snapshot"],
             "/disk.raw",

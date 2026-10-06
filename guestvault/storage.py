@@ -73,14 +73,16 @@ class Store:
         os.replace(temp, folder / "repository-password")
 
     def password(self):
+        if (self.load() or {}).get("password_required", True) is False:
+            return ""
         p = self.root / "secrets/repository-password"
         if not p.exists():
             raise ValueError("No scheduled-backup password saved. Configure credentials first.")
         return p.read_text(encoding="utf-8").rstrip("\r\n")
 
     @contextmanager
-    def lock(self):
-        with (self.root / "operation.lock").open("a+b") as stream:
+    def lock(self, name="operation.lock"):
+        with (self.root / name).open("a+b") as stream:
             try:
                 if os.name == "nt":
                     import msvcrt

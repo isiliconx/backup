@@ -1,8 +1,8 @@
 # GuestVault
 
-Encrypted, periodic backups that run **inside** a Windows, Linux or macOS VM. Export a self-contained `.vmbackup` file, keep it in cloud storage, and import it on a replacement machine using your backup password.
+Compressed, periodic backups with optional password protection that run **inside** a Windows, Linux or macOS VM. Export a self-contained `.vmbackup` file, keep it in cloud storage, and import it on a replacement machine using your backup password, if you chose one.
 
-GuestVault has a local web interface, a CLI, an interval scheduler and OS service installation. It uses [restic](https://restic.net/) for encryption, deduplication, metadata preservation and integrity verification. No accounts, telemetry or paid service are required.
+GuestVault has a local web interface, a CLI, an interval scheduler and OS service installation. It uses [restic](https://restic.net/) for compression, optional password protection, deduplication, metadata preservation and integrity verification. No accounts, telemetry or paid service are required.
 
 ## The recovery boundary
 
@@ -15,7 +15,7 @@ This release provides these recovery paths:
 | Linux system files | Accessible files on mounted local filesystems, hidden profiles, installed application files, system configuration, ownership, permissions and supported extended metadata | Import onto prepared filesystems from rescue media, then repair mount configuration and bootloader as needed |
 | Selected folders, all three OSes | Files, hidden files and supported metadata in the selected folders | Import into an empty folder on the same OS |
 | Windows system files | Fixed-drive files through VSS; supported Windows security metadata when elevated | File recovery; **not** bare-metal Windows recovery |
-| Windows system image | Native `wbadmin` image of the system drive and critical volumes, then an encrypted backup of that image | Import the image and use Windows Recovery's System Image Recovery |
+| Windows system image | Native `wbadmin` image of the system drive and critical volumes, then a compressed backup of that image | Import the image and use Windows Recovery's System Image Recovery |
 | macOS data files | `/Users`, `/Applications`, `/Library`, `/private`, with Full Disk Access and root permissions | File recovery; reinstall the compatible OS and recover applications separately. Sealed OS volumes and automated Migration Assistant recovery are not provided |
 | Offline whole disk | Every readable sector, including partition tables, filesystems and boot files; no RAM | Run from Linux rescue media. Restore onto an unmounted disk of exactly the same size, with destructive target confirmation and readback checksum verification |
 
@@ -45,9 +45,27 @@ py -m venv .venv
 .\.venv\Scripts\guestvault.exe serve
 ```
 
-Use **Back up** to choose your scope, an encrypted repository and an optional portable export folder. Save the plan, then select **Back up now**. Use **Import & restore** to browse for a downloaded `.vmbackup` file, enter its password, verify it and restore to an empty destination.
+Use **Back up** to choose your scope, a repository and an optional portable export folder. Password protection is an explicit checkbox. Save the plan, then select **Back up now**. Use **Import & restore** to browse for a downloaded `.vmbackup` file, enter its password if protected (otherwise leave it empty), verify it and restore to an empty destination.
 
-Use a long, unique password and keep it **outside** the VM. Without it, the encrypted file cannot be restored. Never put backups, passwords or cloud credentials in this GitHub repository.
+If you enable password protection, use a long, unique password and keep it **outside** the VM. Without it, the encrypted file cannot be restored. Never put backups, passwords or cloud credentials in this GitHub repository.
+
+### Optional password
+
+Leave **Protect backups with a password** unchecked to create backups without a password. Anyone with a copy can read all included files and saved credentials. Integrity checks, compression and deduplication still work. Existing protected repositories keep their passwords; choose a new repository to change protection mode.
+
+For unattended backups without saving any credential:
+
+```sh
+guestvault configure --mode folders --source /path/to/files \
+  --repository /external-disk/repository --export-directory /external-disk/exports \
+  --every-hours 24 --schedule --no-password
+guestvault backup
+guestvault install-service
+guestvault verify /downloaded/backup.vmbackup --no-password
+guestvault restore /downloaded/backup.vmbackup --target /empty/recovered --no-password
+```
+
+Repository commands follow the saved protection choice automatically. `verify`, `restore`, `backup-disk` and `restore-disk` also accept `--no-password`. For a password-free remote repository, initialize it with restic's `--insecure-no-password` flag. Storage-provider account credentials are separate and may still be required. See [restic's empty-password documentation](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html#repositories-with-empty-password).
 
 ### Linux system mode
 
@@ -64,7 +82,7 @@ Open the printed `http://127.0.0.1:…/…` session URL in the browser inside yo
 
 ## Periodic backups and cloud storage
 
-An **encrypted repository** holds deduplicated snapshots. A **portable export** is a separate complete snapshot with its own encryption key, unlockable with the same password. Each portable file can restore independently of the original repository or any earlier file.
+A **repository** holds compressed, deduplicated snapshots. Compression is enabled automatically using restic repository format 2 and `--compression auto`. Already-compressed media may shrink very little. Incremental snapshots store changed chunks; each standalone export still includes all chunks needed to restore it. A **portable export** is a separate complete snapshot with its own key, unlockable with the same password or without one if the plan is unprotected. Each portable file can restore independently of the original repository or any earlier file.
 
 ```sh
 sudo .venv/bin/guestvault --state /var/lib/guestvault configure \
@@ -77,15 +95,15 @@ sudo .venv/bin/guestvault --state /var/lib/guestvault backup --use-saved-passwor
 sudo .venv/bin/guestvault --state /var/lib/guestvault install-service
 ```
 
-`--remember-password` explicitly stores the password in a locally protected credential file, excluded from the backup. Linux/macOS use owner-only filesystem permissions; Windows uses a restricted ACL. Anyone controlling the running VM can still access its backup credentials. Unattended backup needs access to the password; it is never stored inside an exported archive.
+`--remember-password` explicitly stores the password in a locally protected credential file, excluded from the backup. Linux/macOS use owner-only filesystem permissions; Windows uses a restricted ACL. Anyone controlling the running VM can still access its backup credentials. Password-protected unattended backup needs access to the password; it is never stored inside an exported archive.
 
-`install-service` installs and starts a systemd service on Linux, a launchd job on macOS or an elevated Task Scheduler job on Windows. Linux/macOS root installation starts at boot; user services depend on the user service manager. The Windows job starts at the current user's login and does not run after logout. Full Disk Access must also cover the macOS service process. A VM without a working service manager can run `guestvault daemon` instead. The app and daemon read the saved interval, catch up after a missed run and retry failed runs after five minutes. Keep the VM powered on for scheduled backups. Disable scheduling in the saved plan to pause backups.
+`install-service` installs and starts a systemd service on Linux, a launchd job on macOS or an elevated Task Scheduler job on Windows. Linux/macOS root installation starts at boot; user services depend on the user service manager. The Windows job starts at the current user's login and does not run after logout. Full Disk Access must also cover the macOS service process. `install-service` detects Linux containers without systemd and starts a detached background daemon instead. It survives terminal/browser closure but has no reboot autostart in that environment; rerun `install-service` after the container or VM restarts. Only one daemon per state directory runs at a time, and the web UI defers scheduling to it. You can also run `guestvault daemon` in the foreground. The app and daemon read the saved interval, catch up after a missed run and retry failed runs after five minutes. Keep the VM powered on for scheduled backups. Disable scheduling in the saved plan to pause backups.
 
 Restic cloud repository addresses such as `s3:s3.amazonaws.com/bucket/guestvault` are supported using the backend's normal environment credentials. Initialize a remote repository with restic first (see the [backend documentation](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html)); GuestVault initializes new local repositories itself. Backend credentials must be available to the service account as well as the interactive shell. Do not supply secrets in a repository URL because the URL is saved in local settings.
 
 For arbitrary cloud storage, export into a locally synced folder or upload the finished `.vmbackup` file yourself. GuestVault does not configure cloud accounts, perform that upload or certify cloud sync completion. The cloud upload must finish before you wipe anything. Exports need sufficient temporary space in the state directory for a complete independent encrypted snapshot, plus space for the final file at its destination. Export publication needs hard-link support (ext4, NTFS and APFS are suitable); for a destination without it, export locally and copy the finished file. Direct cloud repositories avoid the need for a local full-size repository, but portable exports still need staging space.
 
-There is no automatic retention deletion in this first release. Snapshots and portable files accumulate until you deliberately remove them. This prevents a failed backup or export from pruning your last recovery point.
+There is no automatic retention deletion. Snapshots and portable files accumulate until you deliberately remove them. This prevents a failed backup or export from pruning your last recovery point.
 
 ## Recovery
 
@@ -109,6 +127,6 @@ GUESTVAULT_TEST_RESTIC=/path/to/restic .venv/bin/pytest -q
 .venv/bin/python -m build
 ```
 
-The Linux integration tests use real restic encryption and recovery, delete the original files and repository, and verify recovery using only the portable file. They check hidden files, hardlinks, symlinks, file modes, timestamps, supported xattrs, sparse contents, ciphertext corruption, wrong passwords, nonempty/unsafe restore targets, excluded credentials, partial-backup status and loopback API protections. Raw-image transport tests use disposable regular files with device discovery substituted; they do **not** erase a real disk or claim a booted OS recovery test. CI also runs actual folder backup/export/import smoke tests on Windows and macOS. Native `wbadmin`, service startup and full OS boot recovery need validation on the intended VM.
+The Linux integration tests use real restic encryption and recovery, delete the original files and repository, and verify recovery using only the portable file. They also run password-free backup/export/import, compression verification and actual interval scheduling without credentials. They check hidden files, hardlinks, symlinks, file modes, timestamps, supported xattrs, sparse contents, ciphertext corruption, wrong passwords, nonempty/unsafe restore targets, excluded credentials, partial-backup status and loopback API protections. Raw-image transport tests use disposable regular files with device discovery substituted; they do **not** erase a real disk or claim a booted OS recovery test. CI also runs actual folder backup/export/import smoke tests on Windows and macOS. Native `wbadmin`, native OS service startup and full OS boot recovery need validation on the intended VM.
 
 MIT licensed. Restic remains a separately downloaded tool with its own BSD-2-Clause license.

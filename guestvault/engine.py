@@ -32,7 +32,10 @@ def configure(
     excludes=None,
     export_directory=None,
     image_target=None,
+    password_required=True,
 ):
+    if not repository or not str(repository).strip():
+        raise ValueError("Choose a backup repository.")
     if mode not in {"system", "folders", "windows-image"}:
         raise ValueError("Unknown backup mode.")
     if mode in {"system", "windows-image"} and not platforms.elevated():
@@ -62,6 +65,16 @@ def configure(
             raise ValueError("Choose existing source files or directories.")
     repository = str(local_repository(repository) or repository)
     local = local_repository(repository)
+    previous = store.load()
+    if (
+        previous
+        and previous["repository"] == repository
+        and previous.get("password_required", True) != bool(password_required)
+        and (local is None or (local / "config").exists())
+    ):
+        raise ValueError(
+            "Choose a new repository to change password protection. Existing backups keep their protection."
+        )
     if local and any(char in str(local) for char in "[]*?"):
         raise ValueError("Use a repository path without glob characters for safe backup exclusion.")
     if export_directory and any(char in str(export_directory) for char in "[]*?"):
@@ -83,6 +96,7 @@ def configure(
         if export_directory
         else None,
         "image_target": image_target,
+        "password_required": bool(password_required),
         "scheduled": False,
         "last_success": None,
         "next_run": None,
@@ -113,8 +127,17 @@ class Engine:
             # Remote repositories must be initialized explicitly; auth failures must never trigger init.
             self.restic.snapshots(plan["repository"], password)
 
+    def password(self, password):
+        password = self.store.password() if password is None else password
+        protected = self.plan().get("password_required", True)
+        if protected and not password:
+            raise ValueError("This plan requires its repository password.")
+        if not protected and password:
+            raise ValueError("This plan uses no password. Leave the password empty.")
+        return password
+
     def backup(self, password=None, export=None):
-        password = password if password is not None else self.store.password()
+        password = self.password(password)
         with self.store.lock():
             plan = self.plan()
             if plan["mode"] != "folders" and not platforms.elevated():
@@ -216,6 +239,9 @@ class Engine:
                 "work",
                 "operation.lock",
                 "daemon.lock",
+                "daemon.log",
+                "interface.log",
+                "scheduler.json",
                 "activity.json",
             ]
         ]
@@ -228,17 +254,15 @@ class Engine:
 
     def snapshots(self, password=None):
         plan = self.plan()
-        return self.restic.snapshots(plan["repository"], password or self.store.password())
+        return self.restic.snapshots(plan["repository"], self.password(password))
 
     def export(self, snapshot, destination, password=None):
         plan = self.plan()
         with self.store.lock():
-            return self._export(
-                plan["repository"], password or self.store.password(), snapshot, destination
-            )
+            return self._export(plan["repository"], self.password(password), snapshot, destination)
 
     def _export(self, repository, password, snapshot, destination):
-        self.progress({"message": "Copying a complete encrypted snapshot into a portable bundle."})
+        self.progress({"message": "Copying a complete compressed snapshot into a portable bundle."})
         with tempfile.TemporaryDirectory(prefix="export-", dir=self.work) as temp:
             staging = Path(temp) / "repository"
             self.restic.run(

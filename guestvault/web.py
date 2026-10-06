@@ -53,7 +53,7 @@ class App:
 
     def schedule_loop(self):
         while not self.stop.wait(15):
-            if scheduler.due(self.store.load()):
+            if not scheduler.is_running(self.store) and scheduler.due(self.store.load()):
                 try:
                     self.launch(lambda: scheduler.tick(self.store, self.executable, self.progress))
                 except ValueError:
@@ -76,6 +76,7 @@ class App:
             "activity": json.loads(activity.read_text()) if activity.exists() else None,
             "default_repository": str(self.store.root / "repository"),
             "home": str(Path.home()),
+            "scheduler_running": scheduler.is_running(self.store),
         }
 
     def post(self, path, data):
@@ -86,13 +87,29 @@ class App:
             with self.mutex:
                 if self.job["state"] == "running":
                     raise ValueError("Wait for the current operation before changing settings.")
-            if data.get("scheduled") and not data.get("remember"):
+            protected = data.get(
+                "password_required", (self.store.load() or {}).get("password_required", True)
+            )
+            if not isinstance(protected, bool):
+                raise ValueError("Choose whether to protect this backup with a password.")
+            previous = self.store.load()
+            saved = bool(
+                previous
+                and previous["repository"] == data["repository"]
+                and (self.store.root / "secrets/repository-password").exists()
+            )
+            if protected and data.get("scheduled") and not data.get("remember") and not saved:
                 raise ValueError("Scheduled backups require saving the password on this VM.")
-            if data.get("remember") and (
-                not isinstance(password, str)
-                or len(password) < 12
-                or "\n" in password
-                or "\r" in password
+            if (
+                protected
+                and data.get("remember")
+                and not (saved and not password)
+                and (
+                    not isinstance(password, str)
+                    or len(password) < 12
+                    or "\n" in password
+                    or "\r" in password
+                )
             ):
                 raise ValueError("Use a password of at least 12 characters without line breaks.")
             with self.store.lock():
@@ -105,14 +122,19 @@ class App:
                     data.get("excludes", []),
                     data.get("export_directory"),
                     data.get("image_target"),
+                    password_required=protected,
                 )
-                if data.get("remember"):
+                if protected and data.get("remember") and password:
                     self.store.save_password(password)
                 plan["scheduled"] = bool(data.get("scheduled"))
                 self.store.save(plan)
             return plan
         if path == "/api/backup":
-            if password is None and not data.get("saved"):
+            if (
+                password is None
+                and not data.get("saved")
+                and (self.store.load() or {}).get("password_required", True)
+            ):
                 raise ValueError("Enter the repository password.")
             return self.launch(
                 lambda: self.engine().backup(
@@ -126,8 +148,10 @@ class App:
                 lambda: self.engine().export(data["snapshot"], data["destination"], password)
             )
         if path in {"/api/restore", "/api/verify"}:
-            if not isinstance(password, str) or not password:
-                raise ValueError("Enter the backup password.")
+            if password is None:
+                password = ""
+            if not isinstance(password, str):
+                raise ValueError("Enter a password or leave it empty for an unprotected backup.")
             if path == "/api/restore":
                 return self.launch(
                     lambda: self.engine().restore(data["bundle"], data["target"], password)

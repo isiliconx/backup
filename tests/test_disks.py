@@ -43,7 +43,8 @@ def test_regular_files_rejected(tmp_path, monkeypatch):
         disks.offline_device(path)
 
 
-def test_raw_image_transport_and_readback(tmp_path, restic_binary, monkeypatch):
+@pytest.mark.parametrize("password", ["synthetic-disk-password", ""])
+def test_raw_image_transport_and_readback(tmp_path, restic_binary, monkeypatch, password):
     # Exercise the real encryption, export, dump, write and readback pipeline using disposable files.
     # Only the device-discovery guard is substituted; no real disk is opened by this test.
     original = tmp_path / "fake-source.raw"
@@ -56,12 +57,12 @@ def test_raw_image_transport_and_readback(tmp_path, restic_binary, monkeypatch):
     )
     engine = Engine(Store(tmp_path / "state"), restic_binary)
     export = tmp_path / "disk.vmbackup"
-    disks.backup(engine, original, str(tmp_path / "repository"), "synthetic-disk-password", export)
+    disks.backup(engine, original, str(tmp_path / "repository"), password, export)
     original.unlink()
     with pytest.raises(ValueError, match="Repeat"):
-        disks.restore(engine, export, target, None, "synthetic-disk-password")
-    result = disks.restore(engine, export, target, target, "synthetic-disk-password")
+        disks.restore(engine, export, target, None, password)
+    result = disks.restore(engine, export, target, target, password)
     assert result["bytes_restored"] == len(payload)
     assert hashlib.sha256(target.read_bytes()).digest() == hashlib.sha256(payload).digest()
     with pytest.raises(ValueError, match="whole-disk"):
-        engine.restore(export, tmp_path / "files-target", "synthetic-disk-password")
+        engine.restore(export, tmp_path / "files-target", password)

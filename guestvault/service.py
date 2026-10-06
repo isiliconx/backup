@@ -5,18 +5,55 @@ import platform
 import plistlib
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from .scheduler import is_running
+from .storage import private
 
-def install(store):
+
+def systemd_available():
+    return Path("/run/systemd/system").is_dir()
+
+
+def install(store, executable=None):
     plan = store.load()
     if not plan or not plan.get("scheduled"):
-        raise ValueError("Enable scheduling and save the password before installing the service.")
+        raise ValueError(
+            "Enable scheduling before installing the service. Protected plans also need a saved password."
+        )
     store.password()
-    arguments = [sys.executable, "-m", "guestvault", "--state", str(store.root), "daemon"]
+    arguments = [sys.executable, "-m", "guestvault", "--state", str(store.root)]
+    if executable:
+        arguments += ["--restic", str(executable)]
+    arguments.append("daemon")
     system = platform.system()
     if system == "Linux":
+        if not systemd_available():
+            if not is_running(store):
+                log = store.root / "daemon.log"
+                with log.open("ab") as stream:
+                    private(log)
+                    process = subprocess.Popen(
+                        arguments,
+                        stdin=subprocess.DEVNULL,
+                        stdout=stream,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                for _ in range(50):
+                    if process.poll() is not None:
+                        raise ValueError(
+                            "Background scheduler failed to start. Inspect daemon.log in the state directory."
+                        )
+                    if is_running(store) and (store.root / "scheduler.json").exists():
+                        break
+                    time.sleep(0.1)
+                else:
+                    process.terminate()
+                    raise ValueError("Background scheduler did not become ready.")
+            return "Background scheduler running; this environment has no systemd. It survives terminal/browser closure, but must be restarted after VM/container restart."
         root = os.geteuid() == 0
         folder = Path("/etc/systemd/system") if root else Path.home() / ".config/systemd/user"
         folder.mkdir(parents=True, exist_ok=True)

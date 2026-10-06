@@ -1,5 +1,7 @@
 # Recovering a replacement VM
 
+For backups created without password protection, leave the import password empty or add `--no-password` to the CLI recovery commands below. Protected backups still require their original password.
+
 Keep the complete `.vmbackup` file and its password outside the VM. Keep your encryption recovery keys, matching OS installer/rescue media and access to the VM provider separately. This tool cannot create a replacement VM or change its firmware, virtual TPM or host settings.
 
 ## Ordinary files

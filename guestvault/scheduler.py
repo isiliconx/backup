@@ -1,6 +1,7 @@
 """Persistent interval scheduling while the app or daemon is running."""
 
 import datetime as dt
+import os
 import threading
 
 from .engine import Engine
@@ -52,6 +53,19 @@ def tick(store, executable=None, progress=None):
 
 def run(store, executable=None, progress=None, stop=None):
     stop = stop or threading.Event()
-    while not stop.is_set():
-        tick(store, executable, progress)
-        stop.wait(15)
+    with store.lock("daemon.lock"):
+        atomic_json(store.root / "scheduler.json", {"pid": os.getpid(), "running": True})
+        try:
+            while not stop.is_set():
+                tick(store, executable, progress)
+                stop.wait(15)
+        finally:
+            (store.root / "scheduler.json").unlink(missing_ok=True)
+
+
+def is_running(store):
+    try:
+        with store.lock("daemon.lock"):
+            return False
+    except ValueError:
+        return True
