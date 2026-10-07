@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -65,9 +66,32 @@ def system_sources():
     raise ValueError("System mode supports Linux, Windows and macOS. Use folders mode here.")
 
 
+def deleted_directory_mounts(mountinfo=Path("/proc/self/mountinfo")):
+    """Find empty bind mounts whose original directories were unlinked by Linux."""
+    try:
+        lines = mountinfo.read_text().splitlines()
+    except OSError:
+        return []
+    result = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 6 or not fields[3].endswith("//deleted"):
+            continue
+        target = Path(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4]))
+        try:
+            if target != Path("/") and target.is_dir() and not any(target.iterdir()):
+                result.append(str(target))
+        except OSError:
+            continue
+    return result
+
+
 def system_excludes():
     if platform.system() == "Linux":
-        return ["/dev", "/proc", "/sys", "/run", "/tmp", "/var/tmp"]
+        # Kernel-deleted directory bind mounts can return ENOENT from getdents even
+        # though lstat succeeds. Preserve ordinary directories and mounted files.
+        deleted = [re.sub(r"([\\*?\[\]])", r"\\\1", p) for p in deleted_directory_mounts()]
+        return ["/dev", "/proc", "/sys", "/run", "/tmp", "/var/tmp", *deleted]
     if platform.system() == "Darwin":
         return ["/private/tmp", "/private/var/run", "/private/var/vm", "/private/var/tmp"]
     return ["pagefile.sys", "swapfile.sys", "hiberfil.sys"]

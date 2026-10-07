@@ -123,6 +123,8 @@ guestvault restore-repository --repository s3:service/bucket/guestvault \
 
 `init-repository` creates a new repository only when explicitly requested. Existing remote repositories must not be reinitialized. Omit `--no-password` to use password protection. `verify-repository` accepts the same repository, snapshot and password arguments without a restore target. Repository listing and import work on a fresh GuestVault installation without configuring a new backup plan.
 
+Linux system backups also exclude empty directory mounts whose original source directory has been deleted. These stale bind mounts can make the OS directory reader fail even though the mount point still appears present. Other mounted files, ordinary directories and directories with visible contents remain included. Automatically excluded paths are recorded in the recovery metadata.
+
 There is no automatic retention deletion. Snapshots and portable files accumulate until you deliberately remove them. This prevents a failed backup or export from pruning your last recovery point.
 
 ## Recovery
