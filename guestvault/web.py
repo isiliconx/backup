@@ -27,11 +27,15 @@ class App:
         with self.mutex:
             self.job["progress"] = event
 
-    def launch(self, action):
+    def launch(self, action, kind=None):
         with self.mutex:
             if self.job["state"] == "running":
                 raise ValueError("Another operation is running. Wait for it to finish.")
-            self.job = {"state": "running", "started": dt.datetime.now(dt.timezone.utc).isoformat()}
+            self.job = {
+                "state": "running",
+                "kind": kind,
+                "started": dt.datetime.now(dt.timezone.utc).isoformat(),
+            }
 
         def work():
             try:
@@ -157,6 +161,30 @@ class App:
                     lambda: self.engine().restore(data["bundle"], data["target"], password)
                 )
             return self.launch(lambda: self.engine().verify_bundle(data["bundle"], password))
+        if path in {
+            "/api/repository-snapshots",
+            "/api/verify-repository",
+            "/api/restore-repository",
+        }:
+            password = "" if password is None else password
+            if not isinstance(password, str):
+                raise ValueError("Enter a password or leave it empty for an unprotected backup.")
+            if path == "/api/repository-snapshots":
+                return self.launch(
+                    lambda: self.engine().repository_snapshots(data["repository"], password),
+                    "repository-snapshots",
+                )
+            if path == "/api/verify-repository":
+                return self.launch(
+                    lambda: self.engine().verify_repository(
+                        data["repository"], data["snapshot"], password
+                    )
+                )
+            return self.launch(
+                lambda: self.engine().restore_repository(
+                    data["repository"], data["snapshot"], data["target"], password
+                )
+            )
         raise ValueError("Unknown action.")
 
 

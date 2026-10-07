@@ -56,6 +56,19 @@ def parser():
     b.add_argument("--bundle", help="Export this backup as a single .vmbackup file")
     b.add_argument("--use-saved-password", action="store_true")
     commands.add_parser("snapshots")
+    for name in [
+        "repository-snapshots",
+        "verify-repository",
+        "restore-repository",
+        "init-repository",
+    ]:
+        remote = commands.add_parser(name, help="Use a repository directly without a portable file")
+        remote.add_argument("--repository", required=True)
+        remote.add_argument("--no-password", action="store_true")
+        if name in {"verify-repository", "restore-repository"}:
+            remote.add_argument("--snapshot", required=True)
+        if name == "restore-repository":
+            remote.add_argument("--target", required=True)
     e = commands.add_parser("export")
     e.add_argument("snapshot")
     e.add_argument("destination")
@@ -168,7 +181,19 @@ def main(argv=None):
                     else getpass.getpass("Backup password (Enter for no password): ")
                 )
 
-            if args.command == "snapshots":
+            if args.command == "repository-snapshots":
+                result = engine.repository_snapshots(args.repository, backup_password())
+            elif args.command == "verify-repository":
+                result = engine.verify_repository(args.repository, args.snapshot, backup_password())
+            elif args.command == "restore-repository":
+                result = engine.restore_repository(
+                    args.repository, args.snapshot, args.target, backup_password()
+                )
+            elif args.command == "init-repository":
+                if not args.repository.strip():
+                    raise ValueError("Choose a backup repository.")
+                result = engine.restic.run(args.repository, backup_password(), ["init"])
+            elif args.command == "snapshots":
                 result = engine.snapshots(repository_password())
             elif args.command == "backup":
                 password = repository_password()

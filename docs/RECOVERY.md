@@ -1,5 +1,7 @@
 # Recovering a replacement VM
 
+For direct cloud recovery, select **A cloud or local repository** in the import interface, enter its address and provider credentials via the backend's usual setup, load the available backups, and select the saved date. No complete portable file needs to be downloaded or unpacked. CLI: `guestvault restore-repository --repository ADDRESS --snapshot COMPLETE_ID --target EMPTY_DESTINATION` (add `--no-password` for an unprotected repository). The destination still needs capacity for the restored data, and full OS recovery still requires the steps below.
+
 For backups created without password protection, leave the import password empty or add `--no-password` to the CLI recovery commands below. Protected backups still require their original password.
 
 Keep the complete `.vmbackup` file and its password outside the VM. Keep your encryption recovery keys, matching OS installer/rescue media and access to the VM provider separately. This tool cannot create a replacement VM or change its firmware, virtual TPM or host settings.

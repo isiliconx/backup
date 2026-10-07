@@ -103,6 +103,26 @@ Restic cloud repository addresses such as `s3:s3.amazonaws.com/bucket/guestvault
 
 For arbitrary cloud storage, export into a locally synced folder or upload the finished `.vmbackup` file yourself. GuestVault does not configure cloud accounts, perform that upload or certify cloud sync completion. The cloud upload must finish before you wipe anything. Exports need sufficient temporary space in the state directory for a complete independent encrypted snapshot, plus space for the final file at its destination. Export publication needs hard-link support (ext4, NTFS and APFS are suitable); for a destination without it, export locally and copy the finished file. Direct cloud repositories avoid the need for a local full-size repository, but portable exports still need staging space.
 
+### Back up and restore without a full local copy
+
+Set the repository to a cloud address and **leave the portable export folder empty**. GuestVault reads source files and sends compressed, deduplicated chunks directly to the repository. It keeps metadata/cache files locally, whose size depends on the backup; it does not create a complete local backup or archive. The remote storage must still have enough capacity for the saved data. A mounted external disk is another option. A cloud-sync folder on the VM generally still consumes local space.
+
+On a replacement VM, choose **Import & restore → A cloud or local repository**, enter its address and optional backup password, select **Load backups**, then choose a date and restore to an empty destination. Provider credentials must be available to the process. Recovery checks repository integrity and reads files directly into the destination, without staging a full `.vmbackup` file. It still needs enough destination space for the recovered files and retains the same OS recovery boundaries.
+
+CLI equivalent (use your real repository address):
+
+```sh
+guestvault init-repository --repository s3:service/bucket/guestvault --no-password
+guestvault configure --mode system --repository s3:service/bucket/guestvault \
+  --schedule --every-hours 24 --no-password
+guestvault backup
+guestvault repository-snapshots --repository s3:service/bucket/guestvault --no-password
+guestvault restore-repository --repository s3:service/bucket/guestvault \
+  --snapshot COMPLETE_SNAPSHOT_ID --target /empty/recovered --no-password
+```
+
+`init-repository` creates a new repository only when explicitly requested. Existing remote repositories must not be reinitialized. Omit `--no-password` to use password protection. `verify-repository` accepts the same repository, snapshot and password arguments without a restore target. Repository listing and import work on a fresh GuestVault installation without configuring a new backup plan.
+
 There is no automatic retention deletion. Snapshots and portable files accumulate until you deliberately remove them. This prevents a failed backup or export from pruning your last recovery point.
 
 ## Recovery
@@ -127,6 +147,6 @@ GUESTVAULT_TEST_RESTIC=/path/to/restic .venv/bin/pytest -q
 .venv/bin/python -m build
 ```
 
-The Linux integration tests use real restic encryption and recovery, delete the original files and repository, and verify recovery using only the portable file. They also run password-free backup/export/import, compression verification and actual interval scheduling without credentials. They check hidden files, hardlinks, symlinks, file modes, timestamps, supported xattrs, sparse contents, ciphertext corruption, wrong passwords, nonempty/unsafe restore targets, excluded credentials, partial-backup status and loopback API protections. Raw-image transport tests use disposable regular files with device discovery substituted; they do **not** erase a real disk or claim a booted OS recovery test. CI also runs actual folder backup/export/import smoke tests on Windows and macOS. Native `wbadmin`, native OS service startup and full OS boot recovery need validation on the intended VM.
+The Linux integration tests use real restic encryption and recovery, delete the original files and repository, and verify recovery using only the portable file. They also run password-free backup/export/import, compression verification and actual interval scheduling without credentials. They check hidden files, hardlinks, symlinks, file modes, timestamps, supported xattrs, sparse contents, ciphertext corruption, wrong passwords, nonempty/unsafe restore targets, excluded credentials, partial-backup status and loopback API protections. Direct repository tests use real restic requests against a disposable loopback REST backend, wipe the client source/state, and recover without exporting or unpacking a bundle. They check both password choices and that local state stays much smaller than the test payload. Cross-platform smoke tests cover direct repository recovery too. Raw-image transport tests use disposable regular files with device discovery substituted; they do **not** erase a real disk or claim a booted OS recovery test. CI also runs actual folder backup/export/import smoke tests on Windows and macOS. Native `wbadmin`, native OS service startup and full OS boot recovery need validation on the intended VM.
 
 MIT licensed. Restic remains a separately downloaded tool with its own BSD-2-Clause license.

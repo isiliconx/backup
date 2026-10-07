@@ -296,7 +296,34 @@ class Engine:
         self.restic.run(repository, password, ["check", "--read-data"])
         return snapshots[0]
 
-    def restore(self, path, target, password):
+    def repository_snapshots(self, repository, password):
+        if not repository or not str(repository).strip():
+            raise ValueError("Choose a backup repository.")
+        return self.restic.snapshots(repository, password)
+
+    def _repository_snapshot(self, repository, snapshot, password):
+        if not isinstance(snapshot, str) or not bundle.HEX.fullmatch(snapshot):
+            raise ValueError("Choose a backup using its complete snapshot ID.")
+        snapshots = self.repository_snapshots(repository, password)
+        found = next((item for item in snapshots if item["id"] == snapshot), None)
+        if found is None:
+            raise ValueError("The chosen snapshot is not in this repository.")
+        self.progress({"message": "Verifying repository data before direct recovery."})
+        self.restic.run(repository, password, ["check", "--read-data"])
+        return found
+
+    def verify_repository(self, repository, snapshot, password):
+        with self.store.lock():
+            return self._repository_snapshot(repository, snapshot, password)
+
+    def restore_repository(self, repository, snapshot, target, password):
+        """Recover directly from local/cloud storage without staging or unpacking a bundle."""
+        self.restore_target(target)
+        with self.store.lock():
+            saved = self._repository_snapshot(repository, snapshot, password)
+            return self._restore(repository, saved, target, password)
+
+    def restore_target(self, target):
         if not target or not str(target).strip():
             raise ValueError("Choose an empty restore destination.")
         raw_target = Path(target).expanduser().absolute()
@@ -312,42 +339,44 @@ class Engine:
             raise ValueError(
                 "Restore target must be an empty directory. Existing data will not be overwritten."
             )
+        return target
+
+    def restore(self, path, target, password):
+        self.restore_target(target)
         with self.store.lock(), bundle.unpack(path, self.work) as (repository, descriptor):
             snapshot = self._verify(repository, descriptor, password)
-            tags = snapshot.get("tags", [])
-            if "guestvault-disk-image" in tags:
-                raise ValueError(
-                    "This is a whole-disk image. Use restore-disk from Linux rescue media."
-                )
-            os_tag = next(
-                (t.split("=", 1)[1] for t in tags if t.startswith("guestvault-os=")), None
+            return self._restore(repository, snapshot, target, password)
+
+    def _restore(self, repository, snapshot, target, password):
+        tags = snapshot.get("tags", [])
+        if "guestvault-disk-image" in tags:
+            raise ValueError(
+                "This is a whole-disk image. Use restore-disk from Linux rescue media."
             )
-            if os_tag and os_tag != platform.system():
-                raise ValueError(
-                    f"This backup was made on {os_tag}; restore it on that OS to preserve metadata."
-                )
-            # Integrity verification can take a long time: check the destination again before writing.
-            if any(p.is_symlink() for p in [raw_target, *raw_target.parents]):
-                raise ValueError("Restore target cannot contain symlink components.")
-            if target.exists() and (not target.is_dir() or any(target.iterdir())):
-                raise ValueError("Restore target must still be empty after backup verification.")
-            target.mkdir(parents=True, exist_ok=True)
-            self.restic.run(
-                repository,
-                password,
-                [
-                    "restore",
-                    descriptor["snapshot"],
-                    "--target",
-                    str(target),
-                    "--sparse",
-                    "--verify",
-                    "--overwrite",
-                    "never",
-                ],
+        os_tag = next((t.split("=", 1)[1] for t in tags if t.startswith("guestvault-os=")), None)
+        if os_tag and os_tag != platform.system():
+            raise ValueError(
+                f"This backup was made on {os_tag}; restore it on that OS to preserve metadata."
             )
-            return {
-                "target": str(target),
-                "snapshot": descriptor["snapshot"],
-                "status": "Files restored and verified. OS recovery needs the steps in docs/RECOVERY.md.",
-            }
+        # Recheck after the potentially long integrity scan, before creating any output.
+        target = self.restore_target(target)
+        target.mkdir(parents=True, exist_ok=True)
+        self.restic.run(
+            repository,
+            password,
+            [
+                "restore",
+                snapshot["id"],
+                "--target",
+                str(target),
+                "--sparse",
+                "--verify",
+                "--overwrite",
+                "never",
+            ],
+        )
+        return {
+            "target": str(target),
+            "snapshot": snapshot["id"],
+            "status": "Files restored and verified. OS recovery needs the steps in docs/RECOVERY.md.",
+        }

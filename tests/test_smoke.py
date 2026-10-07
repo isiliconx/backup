@@ -25,7 +25,10 @@ def test_real_export_import_on_current_os(tmp_path, password):
     configure(store, "folders", [source], repository, password_required=bool(password))
     engine = Engine(store, executable)
     archive = tmp_path / "portable.vmbackup"
-    engine.backup(password, archive)
+    result = engine.backup(password, archive)
+    direct = tmp_path / "restored-direct"
+    engine.restore_repository(str(repository), result["snapshot"], direct, password)
+    assert next(direct.rglob("example.txt")).read_bytes() == payload
     shutil.rmtree(source)
     shutil.rmtree(repository)
     replacement = Engine(Store(tmp_path / "replacement"), executable)

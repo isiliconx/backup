@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem("guestvault-session");
 if (token) sessionStorage.setItem("guestvault-session", token);
 history.replaceState(null, "", location.pathname);
+let loadedSnapshotJob;
 let state, initialized = false, pickerField, pickerKind, pickerParent;
 const lines = value => value.split("\n").map(s => s.trim()).filter(Boolean);
 const readableDate = value => value ? new Date(value).toLocaleString() : "No backups yet";
@@ -26,6 +27,11 @@ function protectionChanged() {
   $("remember").disabled = !protectedBackup;
   if (!protectedBackup) $("remember").checked = false;
   $("protection-note").textContent = protectedBackup ? "Protected backups need their password to restore." : "No password: anyone with your backup file can read its contents.";
+}
+function importSourceChanged() {
+  const repository = $("import-source").value === "repository";
+  $("file-import-fields").classList.toggle("hidden", repository);
+  $("repository-import-fields").classList.toggle("hidden", !repository);
 }
 function planData() {
   return {mode: $("mode").value, sources: lines($("sources").value), repository: $("repository").value,
@@ -61,12 +67,23 @@ async function refresh() {
       $("image-target").value = p?.image_target || "";
       modeChanged();
     }
+    $("recovery-format").textContent = state.plan?.export_directory ? ".vmbackup" : "Repository snapshots";
     $("last-backup").textContent = readableDate(state.plan?.last_success);
     $("interval-label").textContent = state.plan?.scheduled ? `Every ${state.plan.interval_hours} hours` : "Manual backups";
     $("saved-plan-note").textContent = state.plan ? `Saved ${state.plan.mode} plan. Next scheduled run: ${state.plan.scheduled ? (state.plan.next_run ? readableDate(state.plan.next_run) : "when the scheduler checks") : "disabled"}.` : "Save a plan before your first backup.";
     const job = state.job;
+    if (job.kind === "repository-snapshots" && job.state === "done" && loadedSnapshotJob !== job.started) {
+      loadedSnapshotJob = job.started;
+      const snapshots = [...job.result].sort((a,b) => b.time.localeCompare(a.time));
+      $("import-snapshot").replaceChildren(...snapshots.map(snapshot => {
+        const option = document.createElement("option"); option.value = snapshot.id;
+        option.textContent = `${readableDate(snapshot.time)} · ${snapshot.hostname || "VM"} · ${snapshot.id.slice(0,8)}`;
+        return option;
+      }));
+      if (!snapshots.length) notice("This repository has no backups yet.");
+    }
     const running = job.state === "running";
-    for (const id of ["save", "backup", "restore", "verify", "setup-button"]) $(id).disabled = running;
+    for (const id of ["save", "backup", "restore", "verify", "setup-button", "load-backups"]) $(id).disabled = running;
     $("progress").classList.toggle("hidden", !running);
     $("job-title").textContent = running ? "Operation in progress…" : job.state === "done" ? "Operation completed." : job.state === "failed" ? "Operation failed." : "Ready when you are.";
     const p = job.progress;
@@ -95,9 +112,13 @@ $("backup").addEventListener("click", () => action(async () => {
   $("password").value = "";
 }));
 $("setup-button").addEventListener("click", () => action(() => api("/api/setup", {})));
-function importData() { return {bundle: $("import-file").value, password: $("import-password").value, target: $("target").value}; }
-$("verify").addEventListener("click", () => action(() => api("/api/verify", importData())));
-$("restore").addEventListener("click", () => action(async () => { await api("/api/restore", importData()); $("import-password").value = ""; }));
+$("import-source").addEventListener("change", importSourceChanged);
+function importData() { return {bundle: $("import-file").value, password: $("import-password").value, target: $("target").value,
+  repository: $("import-repository").value, snapshot: $("import-snapshot").value}; }
+function importEndpoint(action) { return `/api/${action}${$("import-source").value === "repository" ? "-repository" : ""}`; }
+$("load-backups").addEventListener("click", () => action(() => api("/api/repository-snapshots", importData())));
+$("verify").addEventListener("click", () => action(() => api(importEndpoint("verify"), importData())));
+$("restore").addEventListener("click", () => action(async () => { await api(importEndpoint("restore"), importData()); $("import-password").value = ""; }));
 async function browse(path) {
   const data = await api(`/api/browse?path=${encodeURIComponent(path)}`);
   $("picker-path").value = data.path; pickerParent = data.parent;
